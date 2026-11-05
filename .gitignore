@@ -1,6 +1,13 @@
 __pycache__/
 *.pyc
+.venv/
+minimind-3/
 .DS_Store
 out
+checkpoints/
 website/
 docs-minimind/
+dataset/*.jsonl
+dataset/.msc
+dataset/.mv
+dataset/._____temp/

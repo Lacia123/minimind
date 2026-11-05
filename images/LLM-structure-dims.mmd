@@ -1,0 +1,53 @@
+%% MiniMind Dense 数据流（默认：hidden=768, layers=8, vocab=6400）
+%% 符号：B=batch，T=序列长度，C=768，H=8，H_kv=4，D=96，I=2432，V=6400
+flowchart TB
+  text["文本<br/>hello"] --> tok_enc["Tokenizer 编码<br/>文本 → [B, T]<br/>id ∈ 0…6399"]
+  tok_enc --> emb["Input Embedding<br/>[B, T] → [B, T, 768]"]
+  emb --> blocks["Transformer Block ×8<br/>[B, T, 768] → [B, T, 768]"]
+  blocks --> fnorm["Final RMSNorm<br/>[B, T, 768] → [B, T, 768]"]
+  fnorm --> head["lm_head 线性层<br/>[B, T, 768] → [B, T, 6400]"]
+  head --> soft["Softmax / 采样<br/>[B, T, 6400]"]
+  soft --> tok_dec["Tokenizer 解码<br/>id → hello world"]
+
+  subgraph block["单个 Transformer Block（Pre-Norm）"]
+    direction TB
+    bin["输入 [B, T, 768]"] --> attn_path["RMSNorm → GQA<br/>[B, T, 768] → [B, T, 768]"]
+    bin --> r1["残差"]
+    attn_path --> add1["+"]
+    r1 --> add1
+    add1 --> ffn_path["RMSNorm → FFN<br/>[B, T, 768] → [B, T, 768]"]
+    add1 --> r2["残差"]
+    ffn_path --> add2["+"]
+    r2 --> add2
+    add2 --> bout["输出 [B, T, 768]"]
+  end
+
+  blocks -.展开.-> block
+
+  subgraph gqa["GQA：8 个 Q 头，4 个 KV 头"]
+    direction TB
+    gx["RMSNorm 输出 [B, T, 768]"] --> q["Q 线性 + 拆头<br/>→ [B, 8, T, 96]"]
+    gx --> k["K 线性 + 拆头<br/>→ [B, 4, T, 96]"]
+    gx --> v["V 线性 + 拆头<br/>→ [B, 4, T, 96]"]
+    q --> qkr["Q/K RMSNorm + RoPE"]
+    k --> qkr
+    qkr --> kvr["K/V 复制到 8 头<br/>[B, 4, T, 96] → [B, 8, T, 96]"]
+    v --> kvr
+    kvr --> score["QKᵀ / √96<br/>→ [B, 8, T, T]"]
+    score --> mask["因果掩码 + Softmax<br/>[B, 8, T, T]"]
+    mask --> outv["× V，合并头<br/>→ [B, T, 768]"]
+    outv --> oproj["o_proj<br/>[B, T, 768] → [B, T, 768]"]
+  end
+
+  attn_path -.展开.-> gqa
+
+  subgraph ffn["FFN：SwiGLU，中间维 2432"]
+    direction TB
+    fx["RMSNorm 输出 [B, T, 768]"] --> gate["gate 线性<br/>→ [B, T, 2432]"]
+    fx --> up["up 线性<br/>→ [B, T, 2432]"]
+    gate --> silu["SiLU(gate) ⊙ up<br/>[B, T, 2432]"]
+    up --> silu
+    silu --> down["down 线性<br/>[B, T, 2432] → [B, T, 768]"]
+  end
+
+  ffn_path -.展开.-> ffn
